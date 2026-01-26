@@ -1,0 +1,87 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests
+      
+      - name: Build Windows executable
+        run: |
+          pyinstaller --onefile --name "MinecraftServerManager" --add-data "server_ui.py;." --add-data "Azul_installer.py;." --add-data "uninstall.py;." --hidden-import=tkinter server.py
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinecraftServerManager-Windows
+          path: dist/MinecraftServerManager.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests
+      
+      - name: Build macOS executable
+        run: |
+          pyinstaller --onefile --name "MinecraftServerManager" --add-data "server_ui.py:." --add-data "Azul_installer.py:." --add-data "uninstall.py:." --hidden-import=tkinter server.py
+      
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinecraftServerManager-macOS
+          path: dist/MinecraftServerManager
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MinecraftServerManager-Windows
+          path: windows
+      
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MinecraftServerManager-macOS
+          path: macos
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            windows/MinecraftServerManager.exe
+            macos/MinecraftServerManager
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
