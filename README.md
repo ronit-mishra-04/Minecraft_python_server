@@ -1,5 +1,8 @@
 ---THIS PROGRAM IS STILL UNDER DEVELOPMENT--
 
+UPDATE: Linux version of this program is in Alpha state, you can use it in your Linux environment, and feel free to test or fix on your end.
+I am still testing this on windows and mac environmen. Once it done, I will remove it from alpha state and put it on Beta.
+
 *This program still has some bugs in it, and I prefer not to download it in your main desktop environment.
 *If you want to work in. I'd suggest you put it in a virtual environment (e.g., VMware Workstation, UTM, Virtual Box, etc.)
 
