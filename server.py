@@ -13,6 +13,108 @@ import requests
 from Azul_installer import setup_java
 
 
+# ========== Windows Self-Elevation ==========
+def _is_windows():
+    return platform.system().lower() == "windows"
+
+def _is_admin_windows():
+    """Check if running with Administrator privileges on Windows."""
+    if not _is_windows():
+        return False
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except (AttributeError, OSError, ImportError):
+        return False
+
+def _elevate_windows():
+    """Re-launch the current script with Administrator privileges.
+    
+    Returns True if elevation was attempted (script will exit).
+    Returns False if already admin or not on Windows.
+    """
+    if not _is_windows():
+        return False
+    
+    if _is_admin_windows():
+        return False  # Already admin
+    
+    print("\n🔑 Administrator privileges required for system-wide Java installation.")
+    print("   Requesting elevation via UAC...\n")
+    
+    try:
+        import ctypes
+        
+        # Get the Python executable and script path
+        python_exe = sys.executable
+        script = os.path.abspath(sys.argv[0])
+        params = ' '.join([f'"{script}"'] + [f'"{arg}"' for arg in sys.argv[1:]])
+        
+        # ShellExecute with 'runas' verb to request elevation
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,           # hwnd
+            "runas",        # lpVerb - 'runas' triggers UAC elevation
+            python_exe,     # lpFile - the Python executable
+            params,         # lpParameters - script and its arguments
+            None,           # lpDirectory
+            1               # nShowCmd - SW_SHOWNORMAL
+        )
+        
+        # ShellExecuteW returns >32 on success, <=32 on error
+        if result > 32:
+            print("✅ Elevated process started. This window will close.")
+            sys.exit(0)  # Exit the non-elevated process
+        else:
+            error_codes = {
+                0: "Out of memory",
+                2: "File not found",
+                3: "Path not found", 
+                5: "Access denied",
+                8: "Not enough memory",
+                32: "DLL not found",
+            }
+            error_msg = error_codes.get(result, f"Unknown error (code {result})")
+            print(f"❌ Failed to elevate: {error_msg}")
+            print("   Please right-click and 'Run as Administrator' manually.")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Could not request elevation: {e}")
+        print("   Please right-click and 'Run as Administrator' manually.")
+        return False
+    
+    return True
+
+def ensure_admin_for_java_install():
+    """On Windows, ensure we have admin rights before installing Java system-wide.
+    
+    If not admin, attempts to relaunch with elevation.
+    """
+    if not _is_windows():
+        return  # Not Windows, no elevation needed
+    
+    if _is_admin_windows():
+        print("🔑 Running as Administrator - Java will be installed for all users.\n")
+        return
+    
+    # Not admin - try to elevate
+    print("\n" + "="*60)
+    print("⚠️  ADMINISTRATOR PRIVILEGES RECOMMENDED")
+    print("="*60)
+    print("\nTo install Java system-wide (accessible by all users),")
+    print("this script needs to run as Administrator.\n")
+    
+    choice = input("Attempt to elevate to Administrator? (y/n): ").strip().lower()
+    
+    if choice in ("y", "yes"):
+        if _elevate_windows():
+            sys.exit(0)  # Elevated process started, exit this one
+    else:
+        print("\n⚠️ Continuing without Administrator privileges.")
+        print("   Java will be installed for the current user only.\n")
+
+
+
 def server_base_dir() -> Path:
     os_name = platform.system().lower()
     if "windows" in os_name:
@@ -285,6 +387,9 @@ def launch_control_ui():
 
 
 def main():
+    # 0) On Windows, offer to elevate to Administrator for system-wide Java install
+    ensure_admin_for_java_install()
+    
     # 1) Ensure Java (Azul) and get the Java executable path
     info = setup_java(java_major=21)
     java_bin = info["java_bin"]  # "java" on PATH (MSI) or full path (portable)

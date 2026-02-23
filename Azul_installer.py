@@ -34,14 +34,10 @@ def normalize_os_arch():
     system = platform.system().lower()
     machine = platform.machine().lower()
 
-    if "windows" in system:
-        os_name = "windows"
-    elif "linux" in system:
+    if "linux" in system:
         os_name = "linux"
-    elif "darwin" in system or "mac" in system:
-        os_name = "macos"
     else:
-        raise ValueError(f"Unsupported OS: {system}")
+        raise ValueError(f"Unsupported OS: {system}. This installer only supports Linux.")
     
     # Mapping the architecture
 
@@ -105,14 +101,8 @@ def get_latest_zulu(java_major=21, os_name=None, arch=None):
                 return pkg["download_url"], pkg["name"]
         return None
     
-    if os_name == "windows":
-
-        found = pick([".msi"]) or pick([".zip"])
-    
-    elif os_name == "macos":
-        found = pick([".tar.gz", ".tgz"]) or pick([".zip"])
-    else: # For Linux distros
-        found = pick([".tar.gz", ".tgz"]) or pick([".zip"])
+    # Linux distros
+    found = pick([".tar.gz", ".tgz"]) or pick([".zip"])
     
     if not found:
         raise ValueError("No suitable package found for the specified OS and architecture.")
@@ -156,13 +146,6 @@ def download_file(url, dest):
     
     print(f"\n✅ Saved: {dest}\n")
 
-def _is_admin_windows():
-    try:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except (AttributeError, OSError, ImportError):
-        return False
-    
 def _is_root_unix():
     try:
         return os.geteuid() == 0
@@ -194,40 +177,38 @@ def verify_java_installation(java_bin=None):
     """Verify that Java is properly installed and accessible."""
     try:
         cmd = [java_bin] if java_bin else ["java"]
+        
+        # Check if the binary exists first (for explicit paths)
+        if java_bin and not Path(java_bin).exists():
+            return False, f"Java binary not found at: {java_bin}"
+        
         result = subprocess.run(
             cmd + ["-version"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=10  # Increased timeout for slower systems
         )
         if result.returncode == 0:
             # Java version info goes to stderr
             version_output = result.stderr if result.stderr else result.stdout
-            return True, version_output.split('\n')[0] if version_output else "Unknown version"
-        return False, None
-    except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
-        return False, str(e)
+            return True, version_output.split('\n')[0] if version_output else "Java installed (version unknown)"
+        else:
+            # Command ran but returned non-zero
+            error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
+            return False, error_msg if error_msg else f"Java returned exit code {result.returncode}"
+    except FileNotFoundError:
+        return False, f"Java executable not found: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return False, "Java command timed out"
+    except Exception as e:
+        return False, f"Error running Java: {type(e).__name__}: {e}"
 
 def choose_permanent_base(os_name: str) -> Path:
     if os_name == "linux":
         return Path("/usr/local/lib/jvm") if _is_root_unix() else Path.home() / ".local" / "share" / "java"
-    if os_name == "macos":
-        return Path("/Library/Java/JavaVirtualMachines") if _is_root_unix() else Path.home() / "Library" / "Java" / "JavaVirtualMachines"
-    if os_name == "windows":
-        if _is_admin_windows():
-            return Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Zulu"
-        else:
-            return Path(os.environ.get("LOCALAPPDATA", os.path.expandvars(r"%LOCALAPPDATA%"))) / "Programs" / "Zulu"
-    raise ValueError(f"Unsupported OS: {os_name}")
+    raise ValueError(f"Unsupported OS: {os_name}. This installer only supports Linux.")
     
-def persist_env_windows_user(jdk_root: Path):
 
-    subprocess.run(["setx", "JAVA_HOME", str(jdk_root)], check=False, shell=True)
-    # Append to PATH using setx - only add %JAVA_HOME%\bin to avoid PATH length issues
-    current_path = os.environ.get('PATH', '')
-    if "%JAVA_HOME%\\bin" not in current_path and str(jdk_root / "bin") not in current_path:
-        subprocess.run(["setx", "PATH", f"%JAVA_HOME%\\bin;%PATH%"], check=False, shell=True)
-    print("🔧 Set JAVA_HOME and updated PATH for the current user (restart Terminal to apply).\n")
 
 
 def move_extracted_to_base(tmp_extract_dir: Path, base: Path) -> Path:
@@ -238,18 +219,35 @@ def move_extracted_to_base(tmp_extract_dir: Path, base: Path) -> Path:
     base.mkdir(parents=True, exist_ok=True)
     dest = base / src_root.name
     
-    if dest.exists():
-        # Validate existing installation has java binary
-        java_bin = dest / "bin" / "java"
-        if not java_bin.exists() and not (dest / "bin" / "java.exe").exists():
-            print(f"⚠️ {dest} exists but appears corrupted. Removing and reinstalling...\n")
-            shutil.rmtree(dest, ignore_errors=True)
+    # More robust existence check
+    if dest.exists() and dest.is_dir():
+        # Check if the bin directory exists AND has java executable
+        java_bin_dir = dest / "bin"
+        java_exe = dest / "bin" / "java.exe"
+        java_unix = dest / "bin" / "java"
+        
+        has_valid_java = (
+            java_bin_dir.exists() and 
+            java_bin_dir.is_dir() and
+            (java_exe.exists() or java_unix.exists())
+        )
+        
+        if not has_valid_java:
+            print(f"⚠️ {dest} exists but appears corrupted or incomplete. Removing and reinstalling...\n")
+            try:
+                shutil.rmtree(dest)
+            except Exception as e:
+                print(f"   Warning: Could not fully remove old directory: {e}")
             shutil.move(str(src_root), str(dest))
             print(f"✅ Moved JDK to: {dest}\n")
         else:
             print(f"⚠️ Target directory {dest} already exists and appears valid. Using existing installation.\n")
         return dest
     else:
+        # Destination doesn't exist, move the extracted files there
+        if dest.exists():
+            # It exists but is not a directory (unlikely but handle it)
+            dest.unlink()
         shutil.move(str(src_root), str(dest))
         print(f"✅ Moved JDK to: {dest}\n")
         return dest
@@ -357,14 +355,7 @@ def ensure_java_installed():
     except FileNotFoundError:
         return False
 
-def install_zulu_msi(msi_path):
-    print ("Running MSI installer (requires Administrator access)...\n")
-    subprocess.run([
-        "msiexec", "/i", msi_path,
-        "/qn",
-        "ADDLOCAL=FeatureJavaHome,FeatureEnvironment"
-    ], check=True)
-    print("✅ Azul JDK installed via MSI.\n")
+
 
 def setup_java(java_major=21):
     if ensure_java_installed():
@@ -372,20 +363,21 @@ def setup_java(java_major=21):
         return {"java_bin": "java", "jdk_root": None, "mode": "existing"}
         
     os_name, arch = normalize_os_arch()
+    
     url, fname = get_latest_zulu(java_major, os_name, arch)
 
-    if os_name in ("linux", "macos"):
-        base = Path.home() / ".local" / "share" / "java"
-        if base.exists():
-            for child in base.iterdir():
-                if child.is_dir() and "zulu" in child.name.lower():
-                    ans = input(f"⚠️ Found existing Azul JDK at {child}. Do you want to uninstall it? (y/n): ").strip().lower()
-                    if ans == "y":
-                        uninstall_zulu_linux()
-                    else:
-                        print("Aborting installation.\n")
-                        return {"java_bin": None, "jdk_root": str(child), "mode": "skipped", "os": os_name, "arch": arch}
-                    break
+    # Check for existing installations
+    base = Path.home() / ".local" / "share" / "java"
+    if base.exists():
+        for child in base.iterdir():
+            if child.is_dir() and "zulu" in child.name.lower():
+                ans = input(f"⚠️ Found existing Azul JDK at {child}. Do you want to uninstall it? (y/n): ").strip().lower()
+                if ans == "y":
+                    uninstall_zulu_linux()
+                else:
+                    print("Aborting installation.\n")
+                    return {"java_bin": None, "jdk_root": str(child), "mode": "skipped", "os": os_name, "arch": arch}
+                break
 
     print(f"Found Azul JDK package: {fname}\n")
 
@@ -394,48 +386,36 @@ def setup_java(java_major=21):
         file_path = os.path.join(tmpdir, fname)
         download_file(url, file_path)
 
-        if os_name == "windows" and fname.lower().endswith(".msi"):
-            install_zulu_msi(file_path)
-            java_bin = "java"
-            jdk_root = None
-            mode = "msi"
+        base = choose_permanent_base(os_name)
+        tmp_extract = Path(tempfile.mkdtemp())
+
+        try:
+            extract_archive(file_path, tmp_extract)
+            jdk_root = move_extracted_to_base(tmp_extract, base)
+        finally:
+            shutil.rmtree(tmp_extract, ignore_errors=True)
+        
+        persist_env_posix(jdk_root)
+        java_bin = str(jdk_root / "bin" / "java")
+        mode = "portable"
+
+        os.environ["JAVA_HOME"] = str(jdk_root)
+        os.environ["PATH"] = str(jdk_root / "bin") + ":" + os.environ["PATH"]
+
+        # Verify installation in current session
+        print("\n" + "="*60)
+        print("📋 Verifying Installation")
+        print("="*60)
+        success, version_info = verify_java_installation(java_bin)
+        if success:
+            print(f"\n✅ Java is working in the current Python session!")
+            print(f"   {version_info}\n")
         else:
-            base = choose_permanent_base(os_name)
-            tmp_extract = Path(tempfile.mkdtemp())
-
-            try:
-                extract_archive(file_path, tmp_extract)
-                jdk_root = move_extracted_to_base(tmp_extract, base)
-            finally:
-                shutil.rmtree(tmp_extract, ignore_errors=True)
-            
-            if os_name == "windows":
-                persist_env_windows_user(jdk_root)
-                java_bin = str(jdk_root / "bin" / "java.exe")
-            else:
-                persist_env_posix(jdk_root)
-                java_bin = str(jdk_root / "bin" / "java")
-            mode = "portable"
-
-            os.environ["JAVA_HOME"] = str(jdk_root)
-            os.environ["PATH"] = f"{jdk_root}/bin:" + os.environ["PATH"]
-
-            # Verify installation in current session
-            print("\n" + "="*60)
-            print("📋 Verifying Installation")
-            print("="*60)
-            success, version_info = verify_java_installation(java_bin)
-            if success:
-                print(f"\n✅ Java is working in the current Python session!")
-                print(f"   {version_info}\n")
-            else:
-                print(f"\n⚠️  Warning: Could not verify Java installation: {version_info}\n")
-            
-            # Important note about shell reload
-            if os_name in ("linux", "macos"):
-                print("\n💡 Remember: If you open a NEW terminal later, Java will")
-                print("   be available automatically. If you want to use it in")
-                print("   THIS terminal, follow the instructions above.\n")
+            print(f"\n⚠️  Warning: Could not verify Java installation: {version_info}\n")
+        
+        print("\n💡 Remember: If you open a NEW terminal later, Java will")
+        print("   be available automatically. If you want to use it in")
+        print("   THIS terminal, follow the instructions above.\n")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return {"java_bin": java_bin, "jdk_root": str(jdk_root) if jdk_root else None, "mode": mode, "os": os_name, "arch": arch}
@@ -482,15 +462,48 @@ def uninstall_zulu_linux():
     else:
         print("ℹ️ No existing Azul JDK installations found.")
 
-def uninstall_zulu_macos():
-    # TODO: Implement macOS uninstallation similar to Linux
-    # Should remove from ~/Library/Java/JavaVirtualMachines or /Library/Java/JavaVirtualMachines
-    # and clean up .zshrc/.zprofile/.bashrc/.profile
-    print("⚠️ macOS uninstallation not yet implemented. Please manually remove from Java installation directory.")
-    pass
+
 
 if __name__ == "__main__":
-    setup_java(java_major=21)
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="Azul Zulu JDK Installer - Install or uninstall Java for your system.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python Azul_installer.py              Install Java 21 (default)
+  python Azul_installer.py --uninstall  Uninstall Java
+  python Azul_installer.py --version 17 Install Java 17
+        """
+    )
+    parser.add_argument(
+        "--uninstall", "-u",
+        action="store_true",
+        help="Uninstall Azul Zulu JDK from the system"
+    )
+    parser.add_argument(
+        "--version", "-v",
+        type=int,
+        default=21,
+        help="Java major version to install (default: 21)"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        if args.uninstall:
+            os_name, _ = normalize_os_arch()
+            print(f"\n🗑️  Uninstalling Azul Zulu JDK on {os_name}...\n")
+            
+            uninstall_zulu_linux()
+            
+            print("Done! You may need to restart your terminal for changes to take effect.")
+        else:
+            setup_java(java_major=args.version)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Installation cancelled by user (Ctrl+C). Exiting...")
+        exit(1)
 
     
 

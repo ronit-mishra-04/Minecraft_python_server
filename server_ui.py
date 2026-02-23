@@ -3,6 +3,7 @@
 Minecraft Server Control Panel
 Run this file to start/stop your Minecraft server.
 """
+from __future__ import annotations
 
 import os
 import sys
