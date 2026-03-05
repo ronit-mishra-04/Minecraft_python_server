@@ -2,8 +2,8 @@ Package: minecraft-python-server
 Version: 1.0.0
 Section: games
 Priority: optional
-Architecture: __ARCH__
-Depends: libc6
+Architecture: all
+Depends: python3 (>= 3.8), python3-requests
 Maintainer: ronit-mishra-04 <ronit-mishra-04@users.noreply.github.com>
 Description: Minecraft Server Installer & Control Panel
  A complete solution for installing and managing Minecraft servers on Ubuntu.
