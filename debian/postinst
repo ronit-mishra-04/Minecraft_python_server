@@ -1,0 +1,23 @@
+#!/bin/bash
+set -e
+
+# Make binaries executable (safety net)
+chmod +x /usr/local/bin/minecraft-server      2>/dev/null || true
+chmod +x /usr/local/bin/minecraft-server-ui    2>/dev/null || true
+chmod +x /usr/local/bin/minecraft-server-uninstall 2>/dev/null || true
+
+# Update desktop database so the .desktop file is registered
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+
+echo ""
+echo "✅  Minecraft Python Server installed successfully!"
+echo ""
+echo "  Available commands:"
+echo "    minecraft-server            — Install & set up a Minecraft server"
+echo "    minecraft-server-ui         — Control panel (start/stop server)"
+echo "    minecraft-server-uninstall  — Uninstall servers & Java"
+echo ""
+echo "  You can also find 'Minecraft Server Control' in your app launcher."
+echo ""

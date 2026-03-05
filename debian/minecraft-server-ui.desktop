@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Minecraft Server Control
+Comment=Start, stop, and manage your Minecraft server
+Exec=minecraft-server-ui
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Game;Utility;
+Keywords=minecraft;server;control;panel;

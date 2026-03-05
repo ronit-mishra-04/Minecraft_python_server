@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+# Clean up desktop database entry
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+
+echo ""
+echo "🗑️  Minecraft Python Server package removed."
+echo "   Note: Server data in ~/.local/share/MinecraftServers was NOT removed."
+echo "   To remove server data, run: rm -rf ~/.local/share/MinecraftServers"
+echo ""
