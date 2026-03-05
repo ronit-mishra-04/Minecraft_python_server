@@ -15,7 +15,14 @@ set -euo pipefail
 
 PKG_NAME="minecraft-python-server"
 PKG_VERSION="1.0.0"
-ARCH="amd64"
+
+# Auto-detect architecture
+case "$(uname -m)" in
+    x86_64)  ARCH="amd64" ;;
+    aarch64) ARCH="arm64" ;;
+    armv7l)  ARCH="armhf" ;;
+    *)       ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)" ;;
+esac
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,9 +45,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     fail "This script must be run on Linux (Ubuntu/Debian)."
 fi
 
-if [[ "$(uname -m)" != "x86_64" ]]; then
-    warn "Detected arch $(uname -m). Package will still be built as amd64."
-fi
+info "Detected architecture: ${ARCH} ($(uname -m))"
 
 # ── 1. Install system dependencies ─────────────────────────────────
 info "Installing system dependencies..."
@@ -90,6 +95,9 @@ cp debian/postinst  "$DEB_DIR/DEBIAN/postinst"
 cp debian/prerm     "$DEB_DIR/DEBIAN/prerm"
 chmod 755 "$DEB_DIR/DEBIAN/postinst"
 chmod 755 "$DEB_DIR/DEBIAN/prerm"
+
+# Fill in detected architecture
+sed -i "s/__ARCH__/${ARCH}/g" "$DEB_DIR/DEBIAN/control"
 
 # Copy binaries
 cp dist/minecraft-server          "$DEB_DIR/usr/local/bin/"

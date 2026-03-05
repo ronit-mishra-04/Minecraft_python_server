@@ -2,7 +2,7 @@ Package: minecraft-python-server
 Version: 1.0.0
 Section: games
 Priority: optional
-Architecture: amd64
+Architecture: __ARCH__
 Depends: libc6
 Maintainer: ronit-mishra-04 <ronit-mishra-04@users.noreply.github.com>
 Description: Minecraft Server Installer & Control Panel
