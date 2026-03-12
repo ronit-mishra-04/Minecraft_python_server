@@ -18,13 +18,7 @@ from pathlib import Path
 
 def server_base_dir() -> Path:
     """Get the base directory where Minecraft servers are stored."""
-    os_name = platform.system().lower()
-    if "windows" in os_name:
-        base = Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData")) / "MinecraftServers"
-    elif "darwin" in os_name:
-        base = Path.home() / "Library" / "Application Support" / "MinecraftServers"
-    else:
-        base = Path.home() / ".local" / "share" / "MinecraftServers"
+    base = Path.home() / ".local" / "share" / "MinecraftServers"
     return base
 
 
@@ -83,159 +77,117 @@ def find_installed_servers() -> list[dict]:
 
 def get_java_bin() -> str:
     """Get the Java binary path."""
-    # Check for Azul Zulu installation
-    os_name = platform.system().lower()
-    
-    if "darwin" in os_name:
-        # Check common macOS locations for Azul Zulu
-        zulu_paths = [
-            Path.home() / ".azul" / "zulu",
-            Path("/Library/Java/JavaVirtualMachines")
-        ]
-        for base in zulu_paths:
-            if base.exists():
-                for jdk in base.iterdir():
-                    java_bin = jdk / "bin" / "java"
-                    if java_bin.exists():
-                        return str(java_bin)
-                    # macOS bundle structure
-                    java_bin = jdk / "Contents" / "Home" / "bin" / "java"
-                    if java_bin.exists():
-                        return str(java_bin)
-    
-    elif "windows" in os_name:
-        # Check Program Files for Zulu
-        pf = Path(os.environ.get("PROGRAMFILES", "C:\\Program Files"))
-        zulu_dir = pf / "Zulu"
-        if zulu_dir.exists():
-            for jdk in zulu_dir.iterdir():
-                java_bin = jdk / "bin" / "java.exe"
-                if java_bin.exists():
-                    return str(java_bin)
-    
-    # Fallback to system java
     return "java"
 
 
 def run_server_in_new_terminal(java_bin: str, folder: Path, min_ram="1G", max_ram="2G"):
     """Launch the Minecraft server in a new terminal window."""
-    jar_cmd = f'cd "{folder}" && "{java_bin}" -Xms{min_ram} -Xmx{max_ram} -jar server.jar nogui'
-    os_name = platform.system().lower()
+    sudouser = os.environ.get("SUDO_USER")
+    
+    if sudouser:
+        jar_cmd = f'cd "{folder}" && su -c "{java_bin} -Xms{min_ram} -Xmx{max_ram} -jar server.jar nogui" {sudouser}'
+        cmd = ["su", "-c", f"{java_bin} -Xms{min_ram} -Xmx{max_ram} -jar server.jar nogui", sudouser]
+    else:
+        jar_cmd = f'cd "{folder}" && "{java_bin}" -Xms{min_ram} -Xmx{max_ram} -jar server.jar nogui'
+        cmd = [java_bin, f"-Xms{min_ram}", f"-Xmx{max_ram}", "-jar", "server.jar", "nogui"]
     
     print(f"🚀 Starting server in: {folder}")
     
-    if "darwin" in os_name:  # macOS
-        apple_script = f'''
-        tell application "Terminal"
-            activate
-            do script "{jar_cmd}"
-        end tell
-        '''
-        subprocess.Popen(["osascript", "-e", apple_script])
-        print("✅ Server launched in a new Terminal window!")
-        
-    elif "windows" in os_name:
-        CREATE_NEW_CONSOLE = 0x00000010
-        cmd = [java_bin, f"-Xms{min_ram}", f"-Xmx{max_ram}", "-jar", "server.jar", "nogui"]
-        subprocess.Popen(cmd, cwd=str(folder), creationflags=CREATE_NEW_CONSOLE)
-        print("✅ Server launched in a new console window!")
-        
-    else:  # Linux - try multiple terminal emulators
-        # List of terminal emulators to try (in order of preference)
-        terminals = [
-            # GNOME Terminal
-            (["gnome-terminal", "--", "bash", "-c", jar_cmd + "; exec bash"], "GNOME Terminal"),
-            # Konsole (KDE)
-            (["konsole", "-e", "bash", "-c", jar_cmd + "; exec bash"], "Konsole"),
-            # XFCE Terminal
-            (["xfce4-terminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "XFCE Terminal"),
-            # MATE Terminal
-            (["mate-terminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "MATE Terminal"),
-            # LXTerminal
-            (["lxterminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "LXTerminal"),
-            # Tilix
-            (["tilix", "-e", f"bash -c '{jar_cmd}'"], "Tilix"),
-            # XTerm (usually available as fallback)
-            (["xterm", "-hold", "-e", jar_cmd], "XTerm"),
-        ]
-        
-        launched = False
-        error_msg = None
-        
-        for cmd, term_name in terminals:
-            try:
-                # Use subprocess.run with a short timeout to see if it fails immediately
-                # Most terminal errors (like DBUS issues) happen right away
-                proc = subprocess.Popen(
-                    cmd, 
-                    cwd=str(folder),
-                    stderr=subprocess.PIPE,
-                    stdout=subprocess.PIPE
-                )
-                # Wait briefly to catch immediate failures
-                time.sleep(0.5)
-                
-                # Check if process died immediately (indicates an error)
-                ret = proc.poll()
-                if ret is not None and ret != 0:
-                    # Process exited with error - read stderr
-                    stderr = proc.stderr.read().decode() if proc.stderr else ""
-                    error_msg = f"{term_name} failed: {stderr.strip()}"
-                    continue
-                
-                # Also check for error output without exit (some terminals do this)
-                if proc.stderr:
-                    import select
-                    if select.select([proc.stderr], [], [], 0)[0]:
-                        stderr = proc.stderr.read().decode()
-                        if "error" in stderr.lower() or "failed" in stderr.lower():
-                            error_msg = f"{term_name}: {stderr.strip()}"
-                            proc.terminate()
-                            continue
-                
-                print(f"✅ Server launched in {term_name}!")
-                launched = True
-                break
-                
-            except FileNotFoundError:
-                continue
-            except Exception as e:
-                error_msg = str(e)
-                continue
-        
-        if not launched:
-            # No terminal emulator found or all failed - ask user what to do
-            print("\n⚠️  Could not launch server in a new terminal window!")
-            if error_msg:
-                print(f"    Last error: {error_msg}\n")
-            else:
-                print("    No graphical terminal emulator found.\n")
-            print("    This often happens when running with 'sudo' (DBUS issues).")
-            print("    Try running WITHOUT sudo: python3 server_ui.py\n")
-            print("    Options:")
-            print("    1) Run in current terminal (you won't be able to use the control panel)")
-            print("    2) Exit and try running without sudo\n")
+    # Linux - try multiple terminal emulators
+    # List of terminal emulators to try (in order of preference)
+    terminals = [
+        # GNOME Terminal
+        (["gnome-terminal", "--", "bash", "-c", jar_cmd + "; exec bash"], "GNOME Terminal"),
+        # Konsole (KDE)
+        (["konsole", "-e", "bash", "-c", jar_cmd + "; exec bash"], "Konsole"),
+        # XFCE Terminal
+        (["xfce4-terminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "XFCE Terminal"),
+        # MATE Terminal
+        (["mate-terminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "MATE Terminal"),
+        # LXTerminal
+        (["lxterminal", "-e", f"bash -c '{jar_cmd}; exec bash'"], "LXTerminal"),
+        # Tilix
+        (["tilix", "-e", f"bash -c '{jar_cmd}'"], "Tilix"),
+        # XTerm (usually available as fallback)
+        (["xterm", "-hold", "-e", jar_cmd], "XTerm"),
+    ]
+    
+    launched = False
+    error_msg = None
+    
+    for cmd, term_name in terminals:
+        try:
+            # Use subprocess.run with a short timeout to see if it fails immediately
+            # Most terminal errors (like DBUS issues) happen right away
+            proc = subprocess.Popen(
+                cmd, 
+                cwd=str(folder),
+                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE
+            )
+            # Wait briefly to catch immediate failures
+            time.sleep(0.5)
             
-            choice = input("    Continue in current terminal? (yes/no): ").strip().lower()
+            # Check if process died immediately (indicates an error)
+            ret = proc.poll()
+            if ret is not None and ret != 0:
+                # Process exited with error - read stderr
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                error_msg = f"{term_name} failed: {stderr.strip()}"
+                continue
             
-            if choice in ("yes", "y", "1"):
-                print("\n🚀 Starting server in current terminal (Ctrl+C to stop)...\n")
-                print("=" * 50)
-                cmd = [java_bin, f"-Xms{min_ram}", f"-Xmx{max_ram}", "-jar", "server.jar", "nogui"]
-                subprocess.run(cmd, cwd=str(folder))
-            else:
-                print("\n💡 To install a terminal emulator, try one of these:")
-                print("    sudo apt install gnome-terminal   # Ubuntu/Debian")
-                print("    sudo apt install xterm            # Lightweight option")
-                print("    sudo apt install konsole          # KDE")
-            return
+            # Also check for error output without exit (some terminals do this)
+            if proc.stderr:
+                import select
+                if select.select([proc.stderr], [], [], 0)[0]:
+                    stderr = proc.stderr.read().decode()
+                    if "error" in stderr.lower() or "failed" in stderr.lower():
+                        error_msg = f"{term_name}: {stderr.strip()}"
+                        proc.terminate()
+                        continue
+            
+            print(f"✅ Server launched in {term_name}!")
+            launched = True
+            break
+            
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            error_msg = str(e)
+            continue
+    
+    if not launched:
+        # No terminal emulator found or all failed - ask user what to do
+        print("\n⚠️  Could not launch server in a new terminal window!")
+        if error_msg:
+            print(f"    Last error: {error_msg}\n")
+        else:
+            print("    No graphical terminal emulator found.\n")
+        print("    This often happens when running with 'sudo' (DBUS issues).")
+        print("    Try running WITHOUT sudo: python3 server_ui.py\n")
+        print("    Options:")
+        print("    1) Run in current terminal (you won't be able to use the control panel)")
+        print("    2) Exit and try running without sudo\n")
+        
+        choice = input("    Continue in current terminal? (yes/no): ").strip().lower()
+        
+        if choice in ("yes", "y", "1"):
+            print("\n🚀 Starting server in current terminal (Ctrl+C to stop)...\n")
+            print("=" * 50)
+            subprocess.run(cmd, cwd=str(folder))
+        else:
+            print("\n💡 To install a terminal emulator, try one of these:")
+            print("    sudo apt install gnome-terminal   # Ubuntu/Debian")
+            print("    sudo apt install xterm            # Lightweight option")
+            print("    sudo apt install konsole          # KDE")
+        return
     
     print("   First start may take a minute to create worlds.")
 
 
 def clear_screen():
     """Clear the terminal screen."""
-    os.system('cls' if platform.system().lower() == 'windows' else 'clear')
+    os.system('clear')
 
 
 def input_with_status_check(prompt: str, folder: Path, check_interval: float = 2.0) -> tuple[str | None, bool]:
@@ -257,84 +209,44 @@ def input_with_status_check(prompt: str, folder: Path, check_interval: float = 2
     input_buffer = ""
     last_check = time.time()
     
-    # Set stdin to non-blocking mode on Unix
-    os_name = platform.system().lower()
+    import termios
+    import tty
     
-    if os_name != "windows":
-        import termios
-        import tty
-        
-        # Save terminal settings
-        old_settings = termios.tcgetattr(sys.stdin)
-        
-        try:
-            # Set terminal to raw mode (character-by-character input)
-            tty.setcbreak(sys.stdin.fileno())
-            
-            while True:
-                # Check if input is available (non-blocking)
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    char = sys.stdin.read(1)
-                    if char == '\n' or char == '\r':
-                        print()  # Echo newline
-                        return input_buffer.strip().lower(), False
-                    elif char == '\x7f' or char == '\b':  # Backspace
-                        if input_buffer:
-                            input_buffer = input_buffer[:-1]
-                            print('\b \b', end='', flush=True)  # Erase character
-                    elif char == '\x03':  # Ctrl+C
-                        raise KeyboardInterrupt
-                    else:
-                        input_buffer += char
-                        print(char, end='', flush=True)  # Echo character
-                
-                # Periodically check server status
-                if time.time() - last_check >= check_interval:
-                    last_check = time.time()
-                    current_status, _ = get_server_status(folder)
-                    if current_status != initial_status:
-                        print("\n\n  🔄 Server status changed! Refreshing...")
-                        time.sleep(0.5)
-                        return None, True
-        finally:
-            # Restore terminal settings
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-    else:
-        # Windows fallback - use threading (Enter still required after status change)
-        input_queue = queue.Queue()
-        status_changed_event = threading.Event()
-        
-        def input_thread():
-            try:
-                result = input()
-                input_queue.put(result)
-            except EOFError:
-                input_queue.put("")
-        
-        def monitor_thread():
-            nonlocal initial_status
-            while not status_changed_event.is_set():
-                time.sleep(check_interval)
-                current_status, _ = get_server_status(folder)
-                if current_status != initial_status:
-                    status_changed_event.set()
-                    break
-        
-        inp_thread = threading.Thread(target=input_thread, daemon=True)
-        mon_thread = threading.Thread(target=monitor_thread, daemon=True)
-        inp_thread.start()
-        mon_thread.start()
+    # Save terminal settings
+    old_settings = termios.tcgetattr(sys.stdin)
+    
+    try:
+        # Set terminal to raw mode (character-by-character input)
+        tty.setcbreak(sys.stdin.fileno())
         
         while True:
-            if status_changed_event.is_set():
-                print("\n\n  🔄 Server status changed! Refreshing...")
-                time.sleep(0.5)
-                return None, True
-            try:
-                result = input_queue.get(timeout=0.2)
-                return result.strip().lower(), False
-            except queue.Empty:
-                continue
+            # Check if input is available (non-blocking)
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                char = sys.stdin.read(1)
+                if char == '\n' or char == '\r':
+                    print()  # Echo newline
+                    return input_buffer.strip().lower(), False
+                elif char == '\x7f' or char == '\b':  # Backspace
+                    if input_buffer:
+                        input_buffer = input_buffer[:-1]
+                        print('\b \b', end='', flush=True)  # Erase character
+                elif char == '\x03':  # Ctrl+C
+                    raise KeyboardInterrupt
+                else:
+                    input_buffer += char
+                    print(char, end='', flush=True)  # Echo character
+            
+            # Periodically check server status
+            if time.time() - last_check >= check_interval:
+                last_check = time.time()
+                current_status, _ = get_server_status(folder)
+                if current_status != initial_status:
+                    print("\n\n  🔄 Server status changed! Refreshing...")
+                    time.sleep(0.5)
+                    return None, True
+    finally:
+        # Restore terminal settings
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
 
 def select_server(servers: list[dict]) -> dict | None:
@@ -400,49 +312,32 @@ def get_server_status(folder: Path) -> tuple[str, int | None]:
     process_running = False
     
     try:
-        # Check for java processes with server.jar
-        if platform.system().lower() == "windows":
-            result = subprocess.run(
-                ["wmic", "process", "where", "name='java.exe'", "get", "commandline,processid"],
-                capture_output=True, text=True
-            )
-            for line in result.stdout.splitlines():
-                if "server.jar" in line and str(folder) in line:
-                    parts = line.strip().split()
-                    if parts:
+        # Unix: use pgrep
+        result = subprocess.run(
+            ["pgrep", "-f", f"java.*server.jar"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            pids = result.stdout.strip().split('\n')
+            for pid_str in pids:
+                try:
+                    pid = int(pid_str)
+                    cwd_link = Path(f"/proc/{pid}/cwd")
+                    if cwd_link.exists():
                         try:
-                            pid = int(parts[-1])
-                            process_running = True
-                            break
-                        except ValueError:
-                            process_running = True
-        else:
-            # Unix: use pgrep
-            result = subprocess.run(
-                ["pgrep", "-f", f"java.*server.jar"],
-                capture_output=True, text=True
-            )
-            if result.returncode == 0:
-                pids = result.stdout.strip().split('\n')
-                for pid_str in pids:
-                    try:
-                        pid = int(pid_str)
-                        cwd_link = Path(f"/proc/{pid}/cwd")
-                        if cwd_link.exists():
-                            try:
-                                cwd = cwd_link.resolve()
-                                if cwd == folder.resolve():
-                                    process_running = True
-                                    break
-                            except (PermissionError, OSError):
+                            cwd = cwd_link.resolve()
+                            if cwd == folder.resolve():
                                 process_running = True
                                 break
-                    except (ValueError, FileNotFoundError):
-                        continue
-                # Fallback: if we found any java server process
-                if not process_running and pids and pids[0]:
-                    process_running = True
-                    pid = int(pids[0]) if pids[0].isdigit() else None
+                        except (PermissionError, OSError):
+                            process_running = True
+                            break
+                except (ValueError, FileNotFoundError):
+                    continue
+            # Fallback: if we found any java server process
+            if not process_running and pids and pids[0]:
+                process_running = True
+                pid = int(pids[0]) if pids[0].isdigit() else None
     except Exception:
         pass
     
@@ -470,11 +365,7 @@ def stop_server(pid: int | None = None) -> bool:
                 pass  # Process already dead
             return True
         else:
-            # Try to kill any java server.jar process
-            if platform.system().lower() == "windows":
-                subprocess.run(["taskkill", "/F", "/IM", "java.exe"], capture_output=True)
-            else:
-                subprocess.run(["pkill", "-f", "java.*server.jar"], capture_output=True)
+            subprocess.run(["pkill", "-f", "java.*server.jar"], capture_output=True)
             return True
     except Exception as e:
         print(f"Error stopping server: {e}")
@@ -487,7 +378,11 @@ _server_process: subprocess.Popen | None = None
 
 def run_server_direct(java_bin: str, folder: Path, min_ram="1G", max_ram="2G") -> subprocess.Popen:
     """Start the Minecraft server as a background process (in current terminal)."""
-    cmd = [java_bin, f"-Xms{min_ram}", f"-Xmx{max_ram}", "-jar", "server.jar", "nogui"]
+    sudouser = os.environ.get("SUDO_USER")
+    if sudouser:
+        cmd = ["su", "-c", f"{java_bin} -Xms{min_ram} -Xmx{max_ram} -jar server.jar nogui", sudouser]
+    else:
+        cmd = [java_bin, f"-Xms{min_ram}", f"-Xmx{max_ram}", "-jar", "server.jar", "nogui"]
     proc = subprocess.Popen(
         cmd,
         cwd=str(folder),

@@ -13,117 +13,38 @@ import requests
 from Azul_installer import setup_java
 
 
-# ========== Windows Self-Elevation ==========
-def _is_windows():
-    return platform.system().lower() == "windows"
 
-def _is_admin_windows():
-    """Check if running with Administrator privileges on Windows."""
-    if not _is_windows():
-        return False
-    try:
-        import ctypes
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except (AttributeError, OSError, ImportError):
-        return False
 
-def _elevate_windows():
-    """Re-launch the current script with Administrator privileges.
-    
-    Returns True if elevation was attempted (script will exit).
-    Returns False if already admin or not on Windows.
-    """
-    if not _is_windows():
-        return False
-    
-    if _is_admin_windows():
-        return False  # Already admin
-    
-    print("\n🔑 Administrator privileges required for system-wide Java installation.")
-    print("   Requesting elevation via UAC...\n")
-    
-    try:
-        import ctypes
-        
-        # Get the Python executable and script path
-        python_exe = sys.executable
-        script = os.path.abspath(sys.argv[0])
-        params = ' '.join([f'"{script}"'] + [f'"{arg}"' for arg in sys.argv[1:]])
-        
-        # ShellExecute with 'runas' verb to request elevation
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,           # hwnd
-            "runas",        # lpVerb - 'runas' triggers UAC elevation
-            python_exe,     # lpFile - the Python executable
-            params,         # lpParameters - script and its arguments
-            None,           # lpDirectory
-            1               # nShowCmd - SW_SHOWNORMAL
-        )
-        
-        # ShellExecuteW returns >32 on success, <=32 on error
-        if result > 32:
-            print("✅ Elevated process started. This window will close.")
-            sys.exit(0)  # Exit the non-elevated process
-        else:
-            error_codes = {
-                0: "Out of memory",
-                2: "File not found",
-                3: "Path not found", 
-                5: "Access denied",
-                8: "Not enough memory",
-                32: "DLL not found",
-            }
-            error_msg = error_codes.get(result, f"Unknown error (code {result})")
-            print(f"❌ Failed to elevate: {error_msg}")
-            print("   Please right-click and 'Run as Administrator' manually.")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Could not request elevation: {e}")
-        print("   Please right-click and 'Run as Administrator' manually.")
-        return False
-    
-    return True
 
-def ensure_admin_for_java_install():
-    """On Windows, ensure we have admin rights before installing Java system-wide.
-    
-    If not admin, attempts to relaunch with elevation.
-    """
-    if not _is_windows():
-        return  # Not Windows, no elevation needed
-    
-    if _is_admin_windows():
-        print("🔑 Running as Administrator - Java will be installed for all users.\n")
+
+def drop_privileges(path: Path):
+    """Ensure downloaded server files and generated eula belong to the original user."""
+    sudouser = os.environ.get("SUDO_USER")
+    if not sudouser:
         return
-    
-    # Not admin - try to elevate
-    print("\n" + "="*60)
-    print("⚠️  ADMINISTRATOR PRIVILEGES RECOMMENDED")
-    print("="*60)
-    print("\nTo install Java system-wide (accessible by all users),")
-    print("this script needs to run as Administrator.\n")
-    
-    choice = input("Attempt to elevate to Administrator? (y/n): ").strip().lower()
-    
-    if choice in ("y", "yes"):
-        if _elevate_windows():
-            sys.exit(0)  # Elevated process started, exit this one
-    else:
-        print("\n⚠️ Continuing without Administrator privileges.")
-        print("   Java will be installed for the current user only.\n")
-
-
+    import pwd
+    try:
+        user_info = pwd.getpwnam(sudouser)
+        uid = user_info.pw_uid
+        gid = user_info.pw_gid
+        
+        # Chown the directory itself
+        if path.exists():
+            os.chown(path, uid, gid)
+            
+            # Recursively chown contents
+            for root, dirs, files in os.walk(path):
+                for dir_name in dirs:
+                    os.chown(os.path.join(root, dir_name), uid, gid)
+                for file_name in files:
+                    os.chown(os.path.join(root, file_name), uid, gid)
+    except Exception as e:
+        print(f"⚠️ Could not drop privileges for {path}: {e}")
 
 def server_base_dir() -> Path:
-    os_name = platform.system().lower()
-    if "windows" in os_name:
-        base = Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData")) / "MinecraftServers"
-    elif "darwin" in os_name:
-        base = Path.home() / "Library" / "Application Support" / "MinecraftServers"
-    else:
-        base = Path.home() / ".local" / "share" / "MinecraftServers"
+    base = Path.home() / ".local" / "share" / "MinecraftServers"
     base.mkdir(parents=True, exist_ok=True)
+    drop_privileges(base)
     return base
 
 def server_dir_for(flavor: str, mc_version: str | None = None) -> Path:
@@ -139,9 +60,16 @@ def handle_eula(folder: Path, java_bin: str):
 
     if not eula_file.exists():
         print("\n 📀 Running the server once to generate eula.txt...")
-        subprocess.run([java_bin, "-jar", "server.jar", "--nogui"], cwd=folder)
+        sudouser = os.environ.get("SUDO_USER")
+        if sudouser:
+            # Drop privileges for the EULA generation run
+            cmd = ["su", "-c", f"{java_bin} -jar server.jar --nogui", sudouser]
+        else:
+            cmd = [java_bin, "-jar", "server.jar", "--nogui"]
+        subprocess.run(cmd, cwd=folder)
         print("📝 eula.txt should now be generated.")
         time.sleep(3)  # Brief wait for file system
+        drop_privileges(folder)
 
     if not eula_file.exists():
         print("❌ eula.txt not found. Something went wrong.")
@@ -387,9 +315,7 @@ def launch_control_ui():
 
 
 def main():
-    # 0) On Windows, offer to elevate to Administrator for system-wide Java install
-    ensure_admin_for_java_install()
-    
+
     # 1) Ensure Java (Azul) and get the Java executable path
     info = setup_java(java_major=21)
     java_bin = info["java_bin"]  # "java" on PATH (MSI) or full path (portable)
@@ -414,6 +340,8 @@ def main():
         else:
             print("Unknown flavor.")
             return
+        # Drop privileges for the entire setup folder before launching UI
+        drop_privileges(folder)
         
         # Save server metadata for UI to read
         server_info = {
