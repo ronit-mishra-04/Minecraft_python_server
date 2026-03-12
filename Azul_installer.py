@@ -192,17 +192,35 @@ def verify_java_installation(java_bin=None):
         if result.returncode == 0:
             # Java version info goes to stderr
             version_output = result.stderr if result.stderr else result.stdout
-            return True, version_output.split('\n')[0] if version_output else "Java installed (version unknown)"
+            
+            # Try to extract the major version number
+            major_version = 0
+            try:
+                # Look for "version "..." "
+                import re
+                match = re.search(r'version "([^"]+)"', version_output)
+                if match:
+                    version_str = match.group(1)
+                    if version_str.startswith("1."):
+                        # For 1.8.x etc
+                        major_version = int(version_str.split('.')[1])
+                    else:
+                        # For 9, 11, 17, 21 etc
+                        major_version = int(version_str.split('.')[0])
+            except Exception:
+                pass
+                
+            return True, major_version, version_output.split('\n')[0] if version_output else "Java installed"
         else:
             # Command ran but returned non-zero
             error_msg = result.stderr.strip() if result.stderr else result.stdout.strip()
-            return False, error_msg if error_msg else f"Java returned exit code {result.returncode}"
+            return False, 0, error_msg if error_msg else f"Java returned exit code {result.returncode}"
     except FileNotFoundError:
-        return False, f"Java executable not found: {cmd[0]}"
+        return False, 0, f"Java executable not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
-        return False, "Java command timed out"
+        return False, 0, "Java command timed out"
     except Exception as e:
-        return False, f"Error running Java: {type(e).__name__}: {e}"
+        return False, 0, f"Error running Java: {type(e).__name__}: {e}"
 
 def choose_permanent_base(os_name: str) -> Path:
     if os_name == "linux":
@@ -349,18 +367,16 @@ def extract_archive(archive_path, extract_to):
         raise ValueError("Unsupported archive format.")
     print(f"Extracted to: {extract_to}\n")
 
-def ensure_java_installed():
-    try:
-        out = subprocess.run(["java", "-version"], capture_output=True, text=True)
-        return out.returncode == 0
-    except FileNotFoundError:
-        return False
-
+def ensure_java_installed(min_version: int = 21) -> bool:
+    is_installed, major_version, _ = verify_java_installation()
+    if is_installed and major_version >= min_version:
+        return True
+    return False
 
 
 def setup_java(java_major=21):
-    if ensure_java_installed():
-        print("✅ Java is already installed.\n")
+    if ensure_java_installed(java_major):
+        print(f"✅ Java {java_major} (or newer) is already installed.\n")
         return {"java_bin": "java", "jdk_root": None, "mode": "existing"}
         
     os_name, arch = normalize_os_arch()
