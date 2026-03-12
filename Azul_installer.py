@@ -423,7 +423,7 @@ def setup_java(java_major=21):
         print("\n" + "="*60)
         print("📋 Verifying Installation")
         print("="*60)
-        success, version_info = verify_java_installation(java_bin)
+        success, major, version_info = verify_java_installation(java_bin)
         if success:
             print(f"\n✅ Java is working in the current Python session!")
             print(f"   {version_info}\n")
